@@ -34,39 +34,41 @@ SSD1306_VERTICAL_AND_LEFT_HORIZONTAL_SCROLL = 0x2A
 DATA_MODE = 0x40
 COMMAND_MODE = 0x00
 
-class MTech_SSD1306
-    
+
+class MTech_SSD1306:
+    """
     Hardware driver for SSD1306 OLED displays using lgpio.
     Developed for Montana Tech CSCI 255361.
-    
-    def __init__(self, bus=1, address=SSD1306_I2C_ADDRESS, width=128, height=32)
+    """
+
+    def __init__(self, bus=1, address=SSD1306_I2C_ADDRESS, width=128, height=32):
         self.width = width
         self.height = height
         self.address = address
-        self.pages = height  8
-        self._buffer = [0]  (width  self.pages)
-        
-        try
+        self.pages = height // 8
+        self._buffer = [0] * (width * self.pages)
+
+        try:
             self.handle = lgpio.i2c_open(bus, address)
             self._initialize()
-        except Exception as e
-            print(fI2C Init Error {e})
+        except Exception as e:
+            print(f"I2C Init Error: {e}")
             self.handle = -1
 
-    def command(self, cmd)
-        Send a single command byte to the display.
+    def command(self, cmd):
+        """Send a single command byte to the display."""
         lgpio.i2c_write_device(self.handle, [COMMAND_MODE, cmd])
 
-    def _initialize(self)
-        Standard sequence to initialize the 128x32 OLED panel.
+    def _initialize(self):
+        """Standard sequence to initialize the 128x32 OLED panel."""
         cmds = [
             SSD1306_DISPLAYOFF,
             SSD1306_SETDISPLAYCLOCKDIV, 0x80,
-            SSD1306_SETMULTIPLEX, 0x1F, # 0x1F for 32 lines
+            SSD1306_SETMULTIPLEX, 0x1F,
             SSD1306_SETDISPLAYOFFSET, 0x00,
-            SSD1306_SETSTARTLINE  0x00,
+            SSD1306_SETSTARTLINE | 0x00,
             SSD1306_CHARGEPUMP, 0x14,
-            SSD1306_MEMORYMODE, 0x00, # Horizontal Addressing Mode
+            SSD1306_MEMORYMODE, 0x00,
             SSD1306_SEGREMAP,
             SSD1306_COMSCANDEC,
             SSD1306_SETCOMPINS, 0x02,
@@ -77,166 +79,127 @@ class MTech_SSD1306
             SSD1306_NORMALDISPLAY,
             SSD1306_DISPLAYON
         ]
-        for c in cmds
+        for c in cmds:
             self.command(c)
 
     # --- CORE GRAPHICS ---
 
-    def draw_pixel(self, x, y, color, transmit=True)
-        
-        Updates the local buffer and optionally transmits the 
-        specific byte to the hardware immediately (Partial Update).
-        Ideal for high-speed games like Pong.
-        
-        if not (0 = x  self.width and 0 = y  self.height)
+    def draw_pixel(self, x, y, color, transmit=True):
+        """
+        Updates buffer and optionally sends pixel immediately.
+        """
+        if not (0 <= x < self.width and 0 <= y < self.height):
             return
 
-        page = y  8
+        page = y // 8
         bit = y % 8
-        index = (page  self.width) + x
+        index = page * self.width + x
 
-        # Update local software buffer
-        if color
-            self._buffer[index] = (1  bit)
-        else
-            self._buffer[index] &= ~(1  bit)
+        if color:
+            self._buffer[index] |= (1 << bit)
+        else:
+            self._buffer[index] &= ~(1 << bit)
 
-        # Transmit only the modified byte to the OLED hardware
-        if transmit
+        if transmit:
             self.command(SSD1306_COLUMNADDR)
-            self.command(x)       # Set Column Start Address
-            self.command(x)       # Set Column End Address
-            
-            self.command(SSD1306_PAGEADDR)
-            self.command(page)    # Set Page Start Address
-            self.command(page)    # Set Page End Address
+            self.command(x)
+            self.command(x)
 
-            # Send the updated byte from the buffer
+            self.command(SSD1306_PAGEADDR)
+            self.command(page)
+            self.command(page)
+
             lgpio.i2c_write_device(self.handle, [DATA_MODE, self._buffer[index]])
 
-    def set_pixel(self, x, y, color)
-        Modifies a pixel in the local buffer only (No I2C transmission).
-        if 0 = x  self.width and 0 = y  self.height
-            page = y  8
+    def set_pixel(self, x, y, color):
+        """Modify buffer only."""
+        if 0 <= x < self.width and 0 <= y < self.height:
+            page = y // 8
             bit = y % 8
-            index = (page  self.width) + x
-            if color
-                self._buffer[index] = (1  bit)
-            else
-                self._buffer[index] &= ~(1  bit)
+            index = page * self.width + x
 
-    def show(self)
-        Transfers the entire local buffer to the display hardware (Full Refresh).
+            if color:
+                self._buffer[index] |= (1 << bit)
+            else:
+                self._buffer[index] &= ~(1 << bit)
+
+    def show(self):
+        """Full refresh."""
         self.command(SSD1306_COLUMNADDR)
         self.command(0)
         self.command(self.width - 1)
         self.command(SSD1306_PAGEADDR)
         self.command(0)
         self.command(self.pages - 1)
-        
-        # Split buffer into 64-byte chunks for stable I2C transmission
-        for i in range(0, len(self._buffer), 64)
-            lgpio.i2c_write_device(self.handle, [DATA_MODE] + self._buffer[ii+64])
 
-    def load_image(self, image)
-        Converts and loads a PIL.Image object into the display buffer.
+        for i in range(0, len(self._buffer), 64):
+            chunk = self._buffer[i:i + 64]
+            lgpio.i2c_write_device(self.handle, [DATA_MODE] + chunk)
+
+    def load_image(self, image):
+        """Load PIL image into buffer."""
         img = image.convert('1').resize((self.width, self.height))
         pix = img.load()
         self.clear_buffer()
-        for y in range(self.height)
-            for x in range(self.width)
-                if pix[x, y]
+
+        for y in range(self.height):
+            for x in range(self.width):
+                if pix[x, y]:
                     self.set_pixel(x, y, True)
 
-    def clear_buffer(self)
-        Clears the software buffer in RAM. Does not affect the display.
-        self._buffer = [0]  len(self._buffer)
+    def clear_buffer(self):
+        self._buffer = [0] * len(self._buffer)
 
-    def clear_screen(self)
-        Clears both the software buffer and the physical display (Heavy operation).
+    def clear_screen(self):
         self.clear_buffer()
         self.show()
 
     # --- HARDWARE FEATURES ---
 
-    def start_scroll_right(self, start=0, stop=3)
-        Enables hardware-based horizontal scrolling to the right.
+    def start_scroll_right(self, start=0, stop=3):
         self.command(SSD1306_RIGHT_HORIZONTAL_SCROLL)
-        self.command(0x00) # Dummy
+        self.command(0x00)
         self.command(start)
-        self.command(0x00) # Interval (0x00 = 5 frames)
+        self.command(0x00)
         self.command(stop)
-        self.command(0x00) # Dummy
-        self.command(0xFF) # Dummy
+        self.command(0x00)
+        self.command(0xFF)
         self.command(SSD1306_ACTIVATE_SCROLL)
 
-    def stop_scroll(self)
-        Disables all hardware scrolling.
+    def stop_scroll(self):
         self.command(SSD1306_DEACTIVATE_SCROLL)
 
-    def set_contrast(self, level)
-        Adjusts display brightness (0-255).
+    def set_contrast(self, level):
         self.command(SSD1306_SETCONTRAST)
         self.command(level & 0xFF)
 
-    def close(self)
-        Cleans up the I2C handle and turns off the display.
-        if self.handle = 0
+    def close(self):
+        if self.handle >= 0:
             self.clear_buffer()
             self.show()
             self.command(SSD1306_DISPLAYOFF)
             lgpio.i2c_close(self.handle)
 
+
 # --- QUICK TEST ---
-if __name__ == __main__
+if __name__ == "__main__":
     oled = MTech_SSD1306()
-    
-    
-    
-    try
-        # Example 1 Loading an external image
-        logo = Image.open(logoB.png)
+
+    try:
+        logo = Image.open("logoB.png")
         oled.load_image(logo)
         oled.show()
         time.sleep(2)
 
-        # Example 2 Test scrolling
         oled.start_scroll_right()
-        print(Scrolling...)
+        print("Scrolling...")
         time.sleep(5)
         oled.stop_scroll()
-        
-        oled.clear_buffer()
-        oled.show() #or  oled.clear_screen()
 
-        # Example 3 Comparing Full Update (show) 
-        for i in range(32)
-            oled.set_pixel(i, i, True) 
-            oled.set_pixel(127-i, i, True)
-            oled.show()
-            time.sleep(0.01)
+        oled.clear_screen()
 
-        oled.clear_screen() 
-        time.sleep(1)
-
-        # Partial Update (draw_pixel)
-        for i in range(32)
-            oled.draw_pixel(i, i, True) 
-            oled.draw_pixel(127-i, i, True)
-            time.sleep(0.1)
-        
-        # Example 4 Dynamic Contrast Test
-        oled.load_image(logo)
-        oled.show()
-
-        for i in range(0, 255, 10)
-            oled.set_contrast(i)
-            time.sleep(0.5)           
-        
-  
-
-    except KeyboardInterrupt
-        print(nHardware process interrupted by user.)
-    finally
+    except KeyboardInterrupt:
+        print("\nInterrupted by user.")
+    finally:
         oled.close()
-        print(Hardware resources released.)
+        print("Hardware resources released.")
